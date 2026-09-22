@@ -118,15 +118,15 @@ RUN set -e; \
 
 # Qt links some third-party libraries from Harmonybrew rather than the
 # additional-packages archive, pcre2 among them, because the archive ships no
-# pcre2 at all. Brew's lib directory is not on musl's search path, so those
-# libraries resolve while building (CMake gives build-tree binaries an RPATH
-# covering the link directories) and then fail to load once Qt is installed
-# and that RPATH is replaced. Append the directory so installed Qt tools run.
-RUN set -e; \
-    p=/etc/ld-musl-aarch64.path; \
-    [ -f "$p" ] || { echo "expected $p to exist" >&2; exit 1; }; \
-    printf '%s:%s\n' "$(cat $p)" "$HOMEBREW_PREFIX/lib" > "$p"; \
-    grep -q harmonybrew "$p"
+# pcre2 at all. Brew's lib directory is on no default search path, so those
+# libraries resolve while building, where CMake gives binaries an RPATH
+# covering the link directories, and then fail to load once Qt is installed
+# and that RPATH is replaced.
+#
+# LD_LIBRARY_PATH rather than a loader config file: OHOS musl resolves
+# libraries through the namespace config in /etc/ld-musl-namespace-aarch64.ini,
+# not /etc/ld-musl-aarch64.path, and editing the latter has no effect at all.
+ENV LD_LIBRARY_PATH=${HOMEBREW_PREFIX}/lib
 
 RUN cmake --version && ninja --version && python3 --version && git --version && \
     "$CC" --version && \
