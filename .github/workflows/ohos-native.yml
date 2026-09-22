@@ -123,7 +123,7 @@ jobs:
       # HOME and TMPDIR need somewhere writable: the uid we pass has no passwd
       # entry and the container's own /tmp is not writable by it.
       - name: prepare work tree
-        run: mkdir -p build scratch
+        run: mkdir -p build scratch qtinstall
 
       - name: cmake file(GLOB) probe
         run: |
@@ -147,6 +147,7 @@ jobs:
             "$IMAGE:$GITHUB_SHA" \
             cmake -S /src -B /build -G Ninja \
               -DOHOS=ON \
+              -DCMAKE_INSTALL_PREFIX=/qtinstall \
               -DCMAKE_C_FLAGS=-DOHOS_PLATFORM=OHOS \
               -DCMAKE_CXX_FLAGS=-DOHOS_PLATFORM=OHOS \
               -DCMAKE_BUILD_TYPE=Release \
@@ -174,10 +175,12 @@ jobs:
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
-            -e HOME=/ws/scratch -e TMPDIR=/ws/scratch \
-            -v "$PWD:/ws" -w /ws \
+            -e HOME=/scratch -e TMPDIR=/scratch \
+            -v "$PWD/build:/build" \
+            -v "$PWD/scratch:/scratch" \
+            -v "$PWD/qtinstall:/qtinstall" \
             "$IMAGE:$GITHUB_SHA" \
-            cmake --install /ws/build --prefix /ws/qtinstall
+            cmake --install /build
           echo "qtbase tools installed:"; find qtinstall/libexec qtinstall/bin -maxdepth 1 -type f -printf "%f\n" | sort | head -30
 
       - name: clone modules
@@ -192,10 +195,10 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             -e HOME=/ws/scratch -e TMPDIR=/ws/scratch \
-            -v "$PWD:/ws" -w /ws \
+            -v "$PWD:/ws" -v "$PWD/qtinstall:/qtinstall" -w /ws \
             "$IMAGE:$GITHUB_SHA" \
             sh -c 'cmake -S /ws/qtshadertools -B /ws/build-qtshadertools -G Ninja \
-                     -DCMAKE_PREFIX_PATH=/ws/qtinstall \
+                     -DCMAKE_PREFIX_PATH=/qtinstall \
                      -DCMAKE_BUILD_TYPE=Release \
                      -DCMAKE_C_FLAGS=-DOHOS_PLATFORM=OHOS \
                      -DCMAKE_CXX_FLAGS=-DOHOS_PLATFORM=OHOS \
@@ -206,10 +209,10 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             -e HOME=/ws/scratch -e TMPDIR=/ws/scratch \
-            -v "$PWD:/ws" -w /ws \
+            -v "$PWD:/ws" -v "$PWD/qtinstall:/qtinstall" -w /ws \
             "$IMAGE:$GITHUB_SHA" \
             sh -c 'cmake -S /ws/qtdeclarative -B /ws/build-qtdeclarative -G Ninja \
-                     -DCMAKE_PREFIX_PATH="/ws/qtinstall;/ws/build-qtshadertools" \
+                     -DCMAKE_PREFIX_PATH="/qtinstall;/ws/build-qtshadertools" \
                      -DCMAKE_BUILD_TYPE=Release \
                      -DCMAKE_C_FLAGS=-DOHOS_PLATFORM=OHOS \
                      -DCMAKE_CXX_FLAGS=-DOHOS_PLATFORM=OHOS \
