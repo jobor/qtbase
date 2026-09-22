@@ -116,6 +116,18 @@ RUN set -e; \
     rm -f /tmp/rt.tar.gz; \
     python3 /tmp/ctx/gen-shims.py "$NATIVE_OHOS_SDK" /system/lib64 "$CC"
 
+# Qt links some third-party libraries from Harmonybrew rather than the
+# additional-packages archive, pcre2 among them, because the archive ships no
+# pcre2 at all. Brew's lib directory is not on musl's search path, so those
+# libraries resolve while building (CMake gives build-tree binaries an RPATH
+# covering the link directories) and then fail to load once Qt is installed
+# and that RPATH is replaced. Append the directory so installed Qt tools run.
+RUN set -e; \
+    p=/etc/ld-musl-aarch64.path; \
+    [ -f "$p" ] || { echo "expected $p to exist" >&2; exit 1; }; \
+    printf '%s:%s\n' "$(cat $p)" "$HOMEBREW_PREFIX/lib" > "$p"; \
+    grep -q harmonybrew "$p"
+
 RUN cmake --version && ninja --version && python3 --version && git --version && \
     "$CC" --version && \
     ls "$NATIVE_OHOS_SDK/sysroot/usr/lib/libpng16.a" && \
