@@ -106,6 +106,10 @@ jobs:
           uname -a
           grep ANON_VMA_NAME "/boot/config-$(uname -r)" \
             || echo "CONFIG_ANON_VMA_NAME absent from the kernel config; expect the glob probe to fail"
+          # Decides whether booting a real OpenHarmony system image here is
+          # even an option: without KVM, TCG is too slow to boot one.
+          ls -la /dev/kvm || echo "/dev/kvm absent: no hardware acceleration on this runner"
+          nproc; free -h
 
       - name: print versions
         run: |
