@@ -92,6 +92,30 @@ ENV PKG_CONFIG_PATH=${NATIVE_OHOS_SDK}/sysroot/usr/lib/pkgconfig \
 ENV CC=${NATIVE_OHOS_SDK}/llvm/bin/clang \
     CXX=${NATIVE_OHOS_SDK}/llvm/bin/clang++
 
+# dockerharmony is an OpenHarmony userland, not a system image, so it ships
+# none of the platform libraries. Without them libQt6Core cannot be loaded and
+# no build-time tool linking it can run, which stops the build at qvkgen.
+#
+# Real libraries where the closure is shallow and self-contained: 11 files,
+# 680 KB, the transitive closure of libdeviceinfo_ndk, libtime_service_ndk and
+# libhilog_ndk. Extracted from harmony-contrib/ohos-qemu v20260919, arm64
+# standard-system image. OpenHarmony is Apache-2.0.
+#
+# The other three Qt6Core needs get generated stubs: libace_napi pulls in the
+# ArkTS engine and libohfileuri the system ability manager and IPC, neither of
+# which belongs in a build container. /system/lib64 is first in the
+# container's musl search path.
+ARG OHOS_RUNTIME_LIBS_URL=https://github.com/jobor/qtbase/releases/download/ohos-runtime-libs-20260919/ohos-runtime-libs-20260919.tar.gz
+ARG OHOS_RUNTIME_LIBS_SHA256=c03a44be84513a63c22b2bfc18c365da91d2eb1095c021a34d66d3ba3a3c3464
+COPY gen-shims.py /tmp/ctx/
+RUN set -e; \
+    curl -fsSL -o /tmp/rt.tar.gz "$OHOS_RUNTIME_LIBS_URL"; \
+    echo "$OHOS_RUNTIME_LIBS_SHA256  /tmp/rt.tar.gz" | sha256sum -c -; \
+    mkdir -p /system/lib64; \
+    tar -xzf /tmp/rt.tar.gz -C /system/lib64; \
+    rm -f /tmp/rt.tar.gz; \
+    python3 /tmp/ctx/gen-shims.py "$NATIVE_OHOS_SDK" /system/lib64 "$CC"
+
 RUN cmake --version && ninja --version && python3 --version && git --version && \
     "$CC" --version && \
     ls "$NATIVE_OHOS_SDK/sysroot/usr/lib/libpng16.a" && \
