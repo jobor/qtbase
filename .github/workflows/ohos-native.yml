@@ -164,6 +164,31 @@ jobs:
             "$IMAGE:$GITHUB_SHA" \
             cmake --build /build --parallel
 
+      - name: diagnose a crashing build tool
+        if: failure()
+        run: |
+          [ -x build/libexec/qvkgen ] || { echo "qvkgen was not built; nothing to diagnose"; exit 0; }
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+            -e HOME=/scratch -e TMPDIR=/scratch -e OHOS_SHIM_TRACE=1 \
+            -v "$PWD/source:/src:ro" \
+            -v "$PWD/build:/build" \
+            -v "$PWD/scratch:/scratch" \
+            -w /scratch \
+            "$IMAGE:$GITHUB_SHA" \
+            sh -c '
+              echo "=== qvkgen with no arguments (does it even start?) ==="
+              /build/libexec/qvkgen; echo "exit: $?"
+              echo
+              echo "=== backtrace under lldb ==="
+              lldb -b -o run -o "bt all" -o quit -- \
+                /build/libexec/qvkgen \
+                /src/src/gui/vulkan/vk.xml \
+                /src/src/gui/vulkan/licenseheader.h.in \
+                /scratch/qvkout 2>&1 | tail -60
+            '
+
       - name: disk usage
         if: always()
         run: df -h /
