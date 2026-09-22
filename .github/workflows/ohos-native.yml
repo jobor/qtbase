@@ -147,6 +147,8 @@ jobs:
             "$IMAGE:$GITHUB_SHA" \
             cmake -S /src -B /build -G Ninja \
               -DOHOS=ON \
+              -DCMAKE_C_FLAGS=-DOHOS_PLATFORM=OHOS \
+              -DCMAKE_CXX_FLAGS=-DOHOS_PLATFORM=OHOS \
               -DCMAKE_BUILD_TYPE=Release \
               -DQT_BUILD_EXAMPLES=OFF \
               -DQT_BUILD_TESTS=OFF
