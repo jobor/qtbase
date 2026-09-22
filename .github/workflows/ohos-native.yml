@@ -156,6 +156,7 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             -e HOME=/scratch -e TMPDIR=/scratch \
+            -e OHOS_SHIM_TRACE=1 \
             -v "$PWD/source:/src:ro" \
             -v "$PWD/build:/build" \
             -v "$PWD/scratch:/scratch" \
