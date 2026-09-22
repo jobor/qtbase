@@ -166,6 +166,56 @@ jobs:
             "$IMAGE:$GITHUB_SHA" \
             cmake --build /build --parallel
 
+      # qtbase proves QCoreApplication-based tools run. The tools in other
+      # modules (qsb, qmlimportscanner, qmltyperegistrar, qmlcachegen) are the
+      # real question: they link shared Qt and do substantial work at build
+      # time. Build the modules that host them and find out.
+      - name: install qtbase
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/ws/scratch -e TMPDIR=/ws/scratch \
+            -v "$PWD:/ws" -w /ws \
+            "$IMAGE:$GITHUB_SHA" \
+            cmake --install /ws/build --prefix /ws/qtinstall
+          echo "qtbase tools installed:"; find qtinstall/libexec qtinstall/bin -maxdepth 1 -type f -printf "%f\n" | sort | head -30
+
+      - name: clone modules
+        run: |
+          for m in qtshadertools qtdeclarative; do
+            git clone --quiet --depth 1 -b dev "https://code.qt.io/qt/$m.git" "$m"
+            echo "$m at $(git -C "$m" rev-parse --short HEAD)"
+          done
+
+      - name: build qtshadertools
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/ws/scratch -e TMPDIR=/ws/scratch \
+            -v "$PWD:/ws" -w /ws \
+            "$IMAGE:$GITHUB_SHA" \
+            sh -c 'cmake -S /ws/qtshadertools -B /ws/build-qtshadertools -G Ninja \
+                     -DCMAKE_PREFIX_PATH=/ws/qtinstall \
+                     -DCMAKE_BUILD_TYPE=Release \
+                     -DCMAKE_C_FLAGS=-DOHOS_PLATFORM=OHOS \
+                     -DCMAKE_CXX_FLAGS=-DOHOS_PLATFORM=OHOS \
+                   && cmake --build /ws/build-qtshadertools --parallel'
+
+      - name: build qtdeclarative
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/ws/scratch -e TMPDIR=/ws/scratch \
+            -v "$PWD:/ws" -w /ws \
+            "$IMAGE:$GITHUB_SHA" \
+            sh -c 'cmake -S /ws/qtdeclarative -B /ws/build-qtdeclarative -G Ninja \
+                     -DCMAKE_PREFIX_PATH="/ws/qtinstall;/ws/build-qtshadertools" \
+                     -DCMAKE_BUILD_TYPE=Release \
+                     -DCMAKE_C_FLAGS=-DOHOS_PLATFORM=OHOS \
+                     -DCMAKE_CXX_FLAGS=-DOHOS_PLATFORM=OHOS \
+                     -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF \
+                   && cmake --build /ws/build-qtdeclarative --parallel'
+
       - name: diagnose a crashing build tool
         if: failure()
         run: |
