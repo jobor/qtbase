@@ -1,0 +1,223 @@
+# Native HarmonyOS build of qtbase.
+#
+# Runs the OpenHarmony userland container (hqzing/dockerharmony, plus the
+# OpenHarmony SDK clang and Qt's third-party dependencies) on a native arm64
+# runner and builds qtbase inside it.
+#
+# This is the native case, not a cross build: no toolchain file and no
+# CMAKE_SYSTEM_NAME. -DOHOS=ON has to be passed by hand because uname inside a
+# container is answered by the host kernel and says Linux, so Qt's native
+# detection in QtAutoDetectHelpers.cmake can never fire here. A real device
+# takes the other branch.
+#
+# A native arm64 runner is not just a speed choice. Under a kernel without
+# CONFIG_ANON_VMA_NAME, OHOS musl's heap-VMA naming prctl fails and leaves
+# errno set, kwsys reports every directory listing over ~48 entries as an
+# error, and file(GLOB) silently returns nothing. The glob probe below exists
+# to name that failure instead of letting it surface as an unidentifiable
+# compiler.
+
+name: OHOS native build
+
+on:
+  push:
+    branches:
+      - ohos-native-ci
+  schedule:
+    # Nightly against upstream dev. 02:30 UTC, off the top of the hour to
+    # avoid the worst of GitHub's cron contention.
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+    inputs:
+      qtbase_ref:
+        description: "Branch or tag of qt/qtbase to build"
+        type: string
+        default: dev
+      gerrit_change:
+        description: "Gerrit patch set to build on top, e.g. 771671/2"
+        type: string
+        default: ""
+
+concurrency:
+  group: ohos-native-${{ github.ref }}-${{ inputs.gerrit_change || 'base' }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ohos-qt-builder
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  build:
+    name: qtbase
+    runs-on: ubuntu-24.04-arm
+    # Hosted runners hard-stop at 6 hours.
+    timeout-minutes: 350
+    permissions:
+      contents: read
+    steps:
+      # This repository carries only the workflow and the image definition.
+      # The Qt source comes from the GitHub mirror of qt/qtbase, so the build
+      # tracks upstream instead of whatever this fork was branched from.
+      - uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - uses: actions/checkout@v4
+        with:
+          repository: qt/qtbase
+          ref: ${{ inputs.qtbase_ref || 'dev' }}
+          path: source
+
+      # The mirror has no refs/changes, so a Gerrit patch set is fetched from
+      # codereview on top. Shallow: we need the tree, not the history.
+      - name: apply Gerrit patch set
+        if: inputs.gerrit_change != ''
+        working-directory: source
+        run: |
+          change="${{ inputs.gerrit_change }}"
+          num="${change%%/*}"
+          ps="${change##*/}"
+          [ "$num" = "$ps" ] && { echo "expected <change>/<patchset>, got '$change'" >&2; exit 1; }
+          ref="refs/changes/${num: -2}/$num/$ps"
+          echo "fetching $ref"
+          git fetch --depth 1 https://codereview.qt-project.org/qt/qtbase "$ref"
+          git checkout --detach FETCH_HEAD
+          git log -1 --format='building %h %s'
+
+      - name: report what is being built
+        run: |
+          echo "qtbase ref : ${{ inputs.qtbase_ref || 'dev' }}"
+          echo "gerrit     : ${{ inputs.gerrit_change || '(none)' }}"
+          git -C source log -1 --format='commit     : %h %ci %s'
+
+      # The image alone is ~4 GB and the runner has ~14 GB free.
+      - name: reclaim disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc "$AGENT_TOOLSDIRECTORY"
+          df -h /
+
+      # Built here rather than pulled from a registry. Passing an image
+      # between jobs would mean publishing it, which needs packages:write and
+      # makes the image a deliberate artifact rather than a CI mechanism. The
+      # cost is a full image build per run, around ten minutes, against a
+      # thirty-plus minute Qt build.
+      - name: build toolchain image
+        run: docker build -t "$IMAGE" ci/.github/ohos
+
+      - name: host kernel
+        run: |
+          uname -a
+          grep ANON_VMA_NAME "/boot/config-$(uname -r)" \
+            || echo "CONFIG_ANON_VMA_NAME absent from the kernel config; expect the glob probe to fail"
+          # Decides whether booting a real OpenHarmony system image here is
+          # even an option: without KVM, TCG is too slow to boot one.
+          ls -la /dev/kvm || echo "/dev/kvm absent: no hardware acceleration on this runner"
+          nproc; free -h
+
+      - name: print versions
+        run: |
+          docker run --rm "$IMAGE" sh -c '
+            cmake --version | head -1
+            echo Ninja $(ninja --version)
+            python3 --version
+            "$CC" --version | head -1
+            printenv | sort'
+
+      # HOME and TMPDIR need somewhere writable: the uid we pass has no passwd
+      # entry and the container's own /tmp is not writable by it.
+      - name: prepare work tree
+        run: mkdir -p build scratch
+
+      - name: cmake file(GLOB) probe
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/scratch -e TMPDIR=/scratch \
+            -v "$PWD/ci:/ci:ro" \
+            -v "$PWD/scratch:/scratch" \
+            "$IMAGE" \
+            cmake -DWORKDIR=/scratch -P /ci/.github/ohos/globtest.cmake
+
+      - name: configure
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/scratch -e TMPDIR=/scratch \
+            -v "$PWD/source:/src:ro" \
+            -v "$PWD/build:/build" \
+            -v "$PWD/scratch:/scratch" \
+            -w /build \
+            "$IMAGE" \
+            cmake -S /src -B /build -G Ninja \
+              -DOHOS=ON \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DQT_BUILD_EXAMPLES=OFF \
+              -DQT_BUILD_TESTS=ON
+
+      - name: build
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/scratch -e TMPDIR=/scratch \
+            -e OHOS_SHIM_TRACE=1 \
+            -v "$PWD/source:/src:ro" \
+            -v "$PWD/build:/build" \
+            -v "$PWD/scratch:/scratch" \
+            -w /build \
+            "$IMAGE" \
+            cmake --build /build --parallel
+
+      # Tests are built but not run. Compiling them is worth it on its own:
+      # the ~577 test binaries exercise far more of Qt's API surface, headers
+      # and templates than the libraries alone, so this catches OHOS-specific
+      # compile breakage the library build misses.
+      #
+      # Running them here would mean testing against our no-op stubs rather
+      # than against HarmonyOS, so a green result would say little and a red
+      # one less. Real test coverage needs a device or a KVM-capable runner
+      # booting a full OpenHarmony image.
+
+      - name: diagnose a crashing build tool
+        if: failure()
+        run: |
+          [ -x build/libexec/qvkgen ] || { echo "qvkgen was not built; nothing to diagnose"; exit 0; }
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+            -e HOME=/scratch -e TMPDIR=/scratch -e OHOS_SHIM_TRACE=1 \
+            -v "$PWD/source:/src:ro" \
+            -v "$PWD/build:/build" \
+            -v "$PWD/scratch:/scratch" \
+            -w /scratch \
+            "$IMAGE" \
+            sh -c '
+              echo "=== qvkgen with no arguments (does it even start?) ==="
+              /build/libexec/qvkgen; echo "exit: $?"
+              echo
+              echo "=== backtrace under lldb ==="
+              lldb -b -o run -o "bt all" -o quit -- \
+                /build/libexec/qvkgen \
+                /src/src/gui/vulkan/vk.xml \
+                /src/src/gui/vulkan/licenseheader.h.in \
+                /scratch/qvkout 2>&1 | tail -60
+            '
+
+      - name: disk usage
+        if: always()
+        run: df -h /
+
+      - name: logs on failure
+        if: failure()
+        run: |
+          for f in build/CMakeFiles/CMakeConfigureLog.yaml \
+                   build/CMakeFiles/CMakeOutput.log \
+                   build/CMakeFiles/CMakeError.log \
+                   build/CMakeCache.txt; do
+            echo "==== $f ===="
+            cat "$f" 2>/dev/null || echo "(absent)"
+          done
